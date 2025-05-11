@@ -4,13 +4,178 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { getDefaultInventory } from '@/lib/data';
+import { getDefaultInventory as defaultInventory } from '@/lib/data';
 import type { InventoryState } from './types';
-import { calculatePossibleOverloads, calculatePossibleExtremes, calculatePossibleSupers, calculateOverloadsFromScratch, calculateAdditionalOverloads, calculateEffective3DosePotions } from '@/lib/utils';
+import { calculateOverloadsFromScratch, calculateAdditionalOverloads } from '@/lib/utils';
 import { AlertCircle, Beaker, FlaskRoundIcon as Flask, Layers } from 'lucide-react';
 
+interface CalculationResults {
+	overloadResults: {
+		possibleOverloads: number;
+		limitingFactors: string[];
+	};
+}
+
+interface OverloadResult {
+	herb: string;
+	secondary: string;
+	possibleOverloads: number;
+	limitingFactor: 'herb' | 'secondary';
+}
+
+function calculatePossibleOverloads(state: InventoryState) {
+	const torstolCount = state.herbs['torstol'] || 0;
+
+	// Calculate total extreme potion doses
+	const extremeDoses = {
+		attack: state.potionDoses['extreme_attack'] || 0,
+		strength: state.potionDoses['extreme_strength'] || 0,
+		defence: state.potionDoses['extreme_defence'] || 0,
+		magic: state.potionDoses['extreme_magic'] || 0,
+		ranging: state.potionDoses['extreme_ranging'] || 0,
+		necromancy: state.potionDoses['extreme_necromancy'] || 0,
+	};
+
+	// Each overload needs 3 doses of each extreme potion
+	const possibleFromExtremes = Math.min(Math.floor(extremeDoses.attack / 3), Math.floor(extremeDoses.strength / 3), Math.floor(extremeDoses.defence / 3), Math.floor(extremeDoses.magic / 3), Math.floor(extremeDoses.ranging / 3), Math.floor(extremeDoses.necromancy / 3));
+
+	const overloads = Math.min(torstolCount, possibleFromExtremes);
+
+	// Determine limiting factors
+	const limitingFactors: string[] = [];
+	if (torstolCount <= possibleFromExtremes) limitingFactors.push('Torstol');
+	if (Math.floor(extremeDoses.attack / 3) <= overloads) limitingFactors.push('Extreme Attack doses');
+	if (Math.floor(extremeDoses.strength / 3) <= overloads) limitingFactors.push('Extreme Strength doses');
+	if (Math.floor(extremeDoses.defence / 3) <= overloads) limitingFactors.push('Extreme Defence doses');
+	if (Math.floor(extremeDoses.magic / 3) <= overloads) limitingFactors.push('Extreme Magic doses');
+	if (Math.floor(extremeDoses.ranging / 3) <= overloads) limitingFactors.push('Extreme Ranging doses');
+	if (Math.floor(extremeDoses.necromancy / 3) <= overloads) limitingFactors.push('Extreme Necromancy doses');
+
+	return {
+		possibleOverloads: overloads,
+		limitingFactors,
+	};
+}
+
+function calculatePossibleExtremes(state: InventoryState): Record<string, { possible: number; limitingFactor: string }> {
+	const results: Record<string, { possible: number; limitingFactor: string }> = {};
+
+	// Check Super potion doses and herbs for each extreme
+	const superDoses = {
+		attack: state.potionDoses['super_attack'] || 0,
+		strength: state.potionDoses['super_strength'] || 0,
+		defence: state.potionDoses['super_defence'] || 0,
+		magic: state.potionDoses['super_magic'] || 0,
+		ranging: state.potionDoses['super_ranging'] || 0,
+		necromancy: state.potionDoses['super_necromancy'] || 0,
+	};
+
+	const herbs = {
+		avantoe: state.herbs['avantoe'] || 0,
+		dwarfWeed: state.herbs['dwarf_weed'] || 0,
+		lantadyme: state.herbs['lantadyme'] || 0,
+	};
+
+	// Calculate possible extremes for each type
+	const types = ['attack', 'strength', 'defence', 'ranging', 'magic', 'necromancy'] as const;
+	types.forEach((type) => {
+		const superDoseCount = superDoses[type];
+		let herbCount = 0;
+		let limitingFactor = '';
+
+		switch (type) {
+			case 'attack':
+				herbCount = herbs.avantoe;
+				break;
+			case 'strength':
+				herbCount = herbs.dwarfWeed;
+				break;
+			case 'defence':
+				herbCount = herbs.lantadyme;
+				break;
+			case 'ranging':
+			case 'magic':
+			case 'necromancy':
+				herbCount = Infinity; // These use other secondaries instead of herbs
+				break;
+		}
+
+		const possible = Math.min(superDoseCount, herbCount);
+		limitingFactor = possible === superDoseCount ? `Super ${type} doses` : `${type === 'attack' ? 'Avantoe' : type === 'strength' ? 'Dwarf Weed' : 'Lantadyme'}`;
+
+		results[`extreme_${type}`] = {
+			possible,
+			limitingFactor,
+		};
+	});
+
+	return results;
+}
+
+function calculatePossibleSupers(state: InventoryState): Record<string, { possible: number; limitingFactor: string }> {
+	const results: Record<string, { possible: number; limitingFactor: string }> = {};
+
+	const herbMap = {
+		super_attack: 'irit',
+		super_strength: 'kwuarm',
+		super_defence: 'cadantine',
+		super_ranging: 'dwarf_weed',
+		super_magic: 'lantadyme',
+		super_necromancy: 'spirit_weed',
+	} as const;
+
+	const secondaryMap = {
+		super_attack: 'eye_of_newt',
+		super_strength: 'limpwurt_root',
+		super_defence: 'white_berries',
+		super_ranging: 'wine_of_zamorak',
+		super_magic: 'potato_cactus',
+		super_necromancy: 'congealed_blood',
+	} as const;
+
+	for (const [potionType, herbType] of Object.entries(herbMap)) {
+		const herbCount = state.herbs[herbType] || 0;
+		const secondaryType = secondaryMap[potionType as keyof typeof secondaryMap];
+		const secondaryCount = state.secondaries[secondaryType] || 0;
+
+		const possible = Math.min(herbCount, secondaryCount);
+		const limitingFactor =
+			possible === herbCount
+				? herbType
+						.split('_')
+						.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+						.join(' ')
+				: secondaryType
+						.split('_')
+						.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+						.join(' ');
+
+		results[potionType] = { possible, limitingFactor };
+	}
+
+	return results;
+}
+
+function calculateEffective3DosePotions(potionCounts: Record<string, { oneDose: number; twoDose: number; threeDose: number; fourDose: number }>) {
+	const results: Record<string, number> = {};
+
+	for (const [potion, counts] of Object.entries(potionCounts)) {
+		// Convert all potions to effective 3-dose potions
+		const totalDoses = counts.oneDose * 1 + counts.twoDose * 2 + counts.threeDose * 3 + counts.fourDose * 4;
+
+		results[potion] = Math.floor(totalDoses / 3);
+	}
+
+	return results;
+}
+
 export default function OverloadCalculator() {
-	const [inventory, setInventory] = useState<InventoryState>(getDefaultInventory());
+	const [inventory, setInventory] = useState<InventoryState>({
+		herbs: {},
+		secondaries: {},
+		potionDoses: {},
+		potionCounts: {},
+	});
 	const [overloadResults, setOverloadResults] = useState({ possibleOverloads: 0, limitingFactors: [] as string[] });
 	const [extremeResults, setExtremeResults] = useState<Record<string, { possible: number; limitingFactor: string }>>({});
 	const [superResults, setSuperResults] = useState<Record<string, { possible: number; limitingFactor: string }>>({});
@@ -36,11 +201,11 @@ export default function OverloadCalculator() {
 		setExtremeResults(calculatePossibleExtremes(inventory));
 		setSuperResults(calculatePossibleSupers(inventory));
 		setFromScratchResults(calculateOverloadsFromScratch(inventory));
-		setAdditionalResults(calculateAdditionalOverloads(inventory, overloads.possibleOverloads));
+		setAdditionalResults(calculateAdditionalOverloads(inventory));
 	}, [inventory]);
 
 	// Calculate effective 3-dose potions for display
-	const effective3DoseExtremes = calculateEffective3DosePotions(inventory.extremePotions);
+	const effective3DoseExtremes = calculateEffective3DosePotions(inventory.potionCounts);
 
 	return (
 		<div className='space-y-6'>
@@ -98,11 +263,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_attack || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_attack']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_attack || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_attack'] || 0}</span>
 									</div>
 									{extremeResults.extreme_attack?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_attack.limitingFactor}</div>}
 								</div>
@@ -117,11 +282,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_strength || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_strength']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_strength || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_strength'] || 0}</span>
 									</div>
 									{extremeResults.extreme_strength?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_strength.limitingFactor}</div>}
 								</div>
@@ -136,11 +301,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_defence || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_defence']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_defence || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_defence'] || 0}</span>
 									</div>
 									{extremeResults.extreme_defence?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_defence.limitingFactor}</div>}
 								</div>
@@ -155,11 +320,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_ranging || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_ranging']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_ranging || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_ranging'] || 0}</span>
 									</div>
 									{extremeResults.extreme_ranging?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_ranging.limitingFactor}</div>}
 								</div>
@@ -174,11 +339,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_magic || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_magic']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_magic || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_magic'] || 0}</span>
 									</div>
 									{extremeResults.extreme_magic?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_magic.limitingFactor}</div>}
 								</div>
@@ -193,11 +358,11 @@ export default function OverloadCalculator() {
 								<div className='space-y-2'>
 									<div className='flex justify-between text-white'>
 										<span>4-dose potions:</span>
-										<span className='font-bold'>{inventory.extremePotions.extreme_necromancy || 0}</span>
+										<span className='font-bold'>{inventory.potionCounts['extreme_necromancy']?.fourDose || 0}</span>
 									</div>
 									<div className='flex justify-between text-white'>
-										<span>Effective 3-dose potions:</span>
-										<span className='font-bold'>{effective3DoseExtremes.extreme_necromancy || 0}</span>
+										<span>Total doses:</span>
+										<span className='font-bold'>{inventory.potionDoses['extreme_necromancy'] || 0}</span>
 									</div>
 									{extremeResults.extreme_necromancy?.limitingFactor && <div className='text-sm text-gray-300'>Limited by: {extremeResults.extreme_necromancy.limitingFactor}</div>}
 								</div>
@@ -300,7 +465,7 @@ export default function OverloadCalculator() {
 				</TabsContent>
 
 				<TabsContent value='scratch'>
-					<Card className='bg-[#1a2e1a] border-[#2a5331]'>
+					{/*<Card className='bg-[#1a2e1a] border-[#2a5331]'>
 						<CardHeader>
 							<CardTitle className='text-white flex items-center gap-2'>
 								<Layers className='h-6 w-6' />
@@ -412,68 +577,8 @@ export default function OverloadCalculator() {
 							)}
 						</CardContent>
 					</Card>
-
-					<Card className='bg-[#1a2e1a] border-[#2a5331] mt-8'>
-						<CardHeader>
-							<CardTitle className='text-white flex items-center gap-2'>
-								<Flask className='h-6 w-6' />
-								Recipe Chain
-							</CardTitle>
-						</CardHeader>
-						<CardContent>
-							<div className='space-y-4'>
-								<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-									<div>
-										<h4 className='font-semibold mb-2 text-white'>Super Potion Recipes:</h4>
-										<ul className='list-disc pl-5 space-y-1 text-gray-200'>
-											<li>
-												<span className='text-white'>Super Attack:</span> Clean Irit + Eye of Newt
-											</li>
-											<li>
-												<span className='text-white'>Super Strength:</span> Clean Kwuarm + Limpwurt Root
-											</li>
-											<li>
-												<span className='text-white'>Super Defence:</span> Clean Cadantine + White Berries
-											</li>
-											<li>
-												<span className='text-white'>Super Ranging:</span> Clean Dwarf Weed + Wine of Zamorak
-											</li>
-											<li>
-												<span className='text-white'>Super Magic:</span> Clean Lantadyme + Potato Cactus
-											</li>
-											<li>
-												<span className='text-white'>Super Necromancy:</span> Clean Spirit Weed + 5 Congealed Blood
-											</li>
-										</ul>
-									</div>
-
-									<div>
-										<h4 className='font-semibold mb-2 text-white'>Extreme Potion Recipes:</h4>
-										<ul className='list-disc pl-5 space-y-1 text-gray-200'>
-											<li>
-												<span className='text-white'>Extreme Attack:</span> Super Attack + Avantoe
-											</li>
-											<li>
-												<span className='text-white'>Extreme Strength:</span> Super Strength + Dwarf Weed
-											</li>
-											<li>
-												<span className='text-white'>Extreme Defence:</span> Super Defence + Lantadyme
-											</li>
-											<li>
-												<span className='text-white'>Extreme Ranging:</span> Super Magic + 5 Grenwall Spikes
-											</li>
-											<li>
-												<span className='text-white'>Extreme Magic:</span> Super Ranging + Ground Mud Runes
-											</li>
-											<li>
-												<span className='text-white'>Extreme Necromancy:</span> Super Necromancy + Ground Miasma Runes
-											</li>
-										</ul>
-									</div>
-								</div>
-							</div>
-						</CardContent>
-					</Card>
+					*/}
+					<h1>Disabled for now</h1>
 				</TabsContent>
 
 				<TabsContent value='variants'>
@@ -652,3 +757,15 @@ export default function OverloadCalculator() {
 		</div>
 	);
 }
+
+const getDefaultInventory = (): InventoryState => ({
+	herbs: {},
+	secondaries: {},
+	extremePotions: {},
+	extremePotions3: {},
+	superPotions3: {},
+	overloadPotions: { overload: 0 },
+	overloadPotions3: { overload: 0 },
+	overloads: { overload: 0 },
+	overloads3: { overload: 0 },
+});

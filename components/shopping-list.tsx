@@ -1,503 +1,519 @@
-"use client"
+'use client';
 
-import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ShoppingBag, ArrowDown, CheckCircle2 } from "lucide-react"
-import {
-  herbs,
-  secondaries,
-  extremeRecipes,
-  superRecipes,
-  getDefaultInventory,
-  otherPotionRecipes,
-  extremePotions,
-} from "@/lib/data"
-import type { InventoryState } from "@/lib/types"
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ShoppingBag, CheckCircle2 } from 'lucide-react';
+import { herbs, secondaries, extremeRecipes, superRecipes, getDefaultInventory, otherPotionRecipes, extremePotions, overloadRecipe, additionalOverloadRecipes } from '@/lib/data';
+import type { InventoryState } from '@/lib/types';
+import { v4 } from 'uuid';
 
-type OverloadType =
-  | "overload"
-  | "supreme_overload"
-  | "overload_salve"
-  | "supreme_overload_salve"
-  | "elder_overload"
-  | "elder_overload_salve"
+type OverloadType = 'overload' | 'supreme_overload' | 'overload_salve' | 'supreme_overload_salve' | 'elder_overload' | 'elder_overload_salve';
 
 interface IngredientItem {
-  id: string
-  name: string
-  quantity: number
-  image: string
-  have: number
-  need: number
-  sufficient: boolean
+	id: string;
+	name: string;
+	quantity: number;
+	image: string;
+	have: number;
+	need: number;
+	sufficient: boolean;
+	children?: IngredientItem[]; // Add children for tree structure
+	parent?: string; // Track parent relationship
 }
 
 export default function ShoppingList() {
-  const [desiredAmount, setDesiredAmount] = useState<number>(10)
-  const [overloadType, setOverloadType] = useState<OverloadType>("overload")
-  const [showResults, setShowResults] = useState<boolean>(false)
-  const [ingredients, setIngredients] = useState<IngredientItem[]>([])
-  const [viewMode, setViewMode] = useState<"all" | "herbs" | "potions" | "secondaries" | "needed">("all")
-  const [inventory, setInventory] = useState<InventoryState>(getDefaultInventory())
+	const [desiredAmount, setDesiredAmount] = useState<number>(10);
+	const [overloadType, setOverloadType] = useState<OverloadType>('overload');
+	const [ingredients, setIngredients] = useState<IngredientItem[]>([]);
+	const [inventory, setInventory] = useState<InventoryState>(getDefaultInventory());
 
-  // Load inventory from localStorage on component mount
-  useEffect(() => {
-    const savedInventory = localStorage.getItem("rs3-herb-inventory")
-    if (savedInventory) {
-      try {
-        setInventory(JSON.parse(savedInventory))
-      } catch (e) {
-        console.error("Failed to parse saved inventory", e)
-      }
-    }
-  }, [])
+	// Load inventory from localStorage on component mount
+	useEffect(() => {
+		const savedInventory = localStorage.getItem('rs3-herb-inventory');
+		if (savedInventory) {
+			try {
+				const parsedInventory = JSON.parse(savedInventory);
+				const defaultInventory = getDefaultInventory();
+				setInventory({
+					herbs: { ...defaultInventory.herbs, ...parsedInventory.herbs },
+					secondaries: { ...defaultInventory.secondaries, ...parsedInventory.secondaries },
+					potionDoses: { ...defaultInventory.potionDoses, ...parsedInventory.potionDoses },
+					potionCounts: { ...defaultInventory.potionCounts, ...parsedInventory.potionCounts },
+				});
+			} catch (e) {
+				console.error('Failed to parse saved inventory', e);
+			}
+		}
+	}, []);
 
-  const calculateIngredients = () => {
-    const requiredIngredients: Record<string, IngredientItem> = {}
+	// TODO: I need to add something to check/decrement potential doses so that ingredients are not overlapping in terms of doses
+	const updateIngredientQuantities = (ingredients: IngredientItem[]): IngredientItem[] => {
+		return ingredients.map((ingredient) => {
+			let have = 0;
+			// Check herbs
+			if (ingredient.id in inventory.herbs) {
+				have = inventory.herbs[ingredient.id];
+			} else if (ingredient.id in inventory.potionDoses) {
+				const doses = inventory.potionDoses[ingredient.id];
+				// For extreme potions, we need exactly 3 doses
+				console.log(ingredient.parent);
+				if (ingredient.parent && ingredient.parent.includes('extreme_')) {
+					have = Math.floor(doses / 3);
+				} else {
+					have = Math.floor(doses / 4);
+				}
+			} else if (ingredient.id in inventory.secondaries) {
+				have = inventory.secondaries[ingredient.id];
+			}
 
-    // Helper function to add an ingredient to our list
-    const addIngredient = (id: string, name: string, quantity: number, image: string) => {
-      // Get how many we already have in inventory
-      let haveAmount = 0
+			const need = Math.max(0, ingredient.quantity - have);
+			const sufficient = need === 0;
 
-      // Check herbs
-      if (id in inventory.herbs) {
-        haveAmount = inventory.herbs[id] || 0
-      }
-      // Check secondaries (including super potions)
-      else if (id in inventory.secondaries) {
-        haveAmount = inventory.secondaries[id] || 0
-      }
-      // Check extreme potions
-      else if (id in inventory.extremePotions) {
-        haveAmount = inventory.extremePotions[id] || 0
-      }
+			// Update children recursively
+			const children = ingredient.children ? updateIngredientQuantities(ingredient.children) : [];
 
-      // Calculate how many more we need
-      const needAmount = Math.max(0, quantity - haveAmount)
-      const sufficient = haveAmount >= quantity
+			return {
+				...ingredient,
+				have,
+				need,
+				sufficient,
+				children,
+			};
+		});
+	};
 
-      if (requiredIngredients[id]) {
-        requiredIngredients[id].quantity += quantity
-        requiredIngredients[id].need = Math.max(0, requiredIngredients[id].quantity - haveAmount)
-        requiredIngredients[id].sufficient = haveAmount >= requiredIngredients[id].quantity
-      } else {
-        requiredIngredients[id] = {
-          id,
-          name,
-          quantity,
-          image,
-          have: haveAmount,
-          need: needAmount,
-          sufficient,
-        }
-      }
-    }
+	const getPotionDoses = (id: string): number => {
+		return inventory.potionDoses[id] || 0;
+	};
 
-    // Find herb or secondary by ID
-    const findItem = (id: string) => {
-      const herb = herbs.find((h) => h.id === id)
-      if (herb) return herb
-      const secondary = secondaries.find((s) => s.id === id)
-      return secondary
-    }
+	const getEffectivePotionCount = (id: string): number => {
+		return Math.floor(getPotionDoses(id) / 4);
+	};
 
-    // Calculate ingredients for a potion from otherPotionRecipes
-    const calculateOtherPotionIngredients = (potionId: string, amount: number) => {
-      const recipe = otherPotionRecipes[potionId]
-      if (!recipe) return
+	const getSuperPotionCount = getEffectivePotionCount; // They do the same thing now
 
-      if (recipe.herb) {
-        const herb = findItem(recipe.herb)
-        if (herb) {
-          addIngredient(recipe.herb, herb.name, amount, herb.image)
-        }
-      }
+	const calculateIngredients = () => {
+		setIngredients([]);
+		const dosesNeeded = desiredAmount * 3; // Each overload needs 3 doses of each extreme potion
 
-      if (recipe.secondary) {
-        const secondary = findItem(recipe.secondary)
-        if (secondary) {
-          const quantity = (recipe.quantity || 1) * amount
-          addIngredient(recipe.secondary, secondary.name, quantity, secondary.image)
-        }
-      }
+		if (overloadType === 'supreme_overload' || overloadType === 'supreme_overload_salve') {
+			// Start with Supreme Overload as the root
+			const supremeOverload = findItem('supreme_overload');
+			if (supremeOverload) {
+				addIngredient('supreme_overload', supremeOverload.name, desiredAmount, supremeOverload.image);
 
-      // For potions that require other potions (like super antifire)
-      if (recipe.potion) {
-        const potion = findItem(recipe.potion)
-        if (potion) {
-          addIngredient(recipe.potion, potion.name, amount, potion.image)
-          // Recursively calculate ingredients for the base potion
-          calculateOtherPotionIngredients(recipe.potion, amount)
-        }
-      }
-    }
+				// Add Overload as a child of Supreme Overload
+				const overload = findItem('overload');
+				if (overload) {
+					addIngredient('overload', overload.name, desiredAmount, overload.image, 'supreme_overload');
 
-    // Base overload ingredients
-    addIngredient("torstol", "Clean Torstol", desiredAmount, findItem("torstol")?.image || "")
+					// Add extreme potions under the overload (each requires 4 doses)
+					const extremePotionsList = ['extreme_attack', 'extreme_strength', 'extreme_defence', 'extreme_ranging', 'extreme_magic', 'extreme_necromancy'];
+					extremePotionsList.forEach((potionId) => {
+						calculateExtremePotionIngredients(potionId, dosesNeeded, 'supreme_overload.overload');
+					});
 
-    // Add extreme potions (3-dose)
-    const extremePotionsList = [
-      "extreme_attack",
-      "extreme_strength",
-      "extreme_defence",
-      "extreme_ranging",
-      "extreme_magic",
-      "extreme_necromancy",
-    ]
+					// Add torstol under the overload
+					const torstolAmount = inventory.herbs.torstol || 0;
+					const neededTorstol = Math.max(0, desiredAmount - torstolAmount);
+					if (neededTorstol > 0) {
+						addIngredient('torstol', 'Clean Torstol', desiredAmount, findItem('torstol')?.image || '', 'supreme_overload.overload');
+					}
+				}
 
-    extremePotionsList.forEach((potionId) => {
-      // For each extreme potion, we need one per overload
-      const potionData = extremePotions.find((p) => p.id === potionId)
+				// Add super potions as direct children of Supreme Overload
+				const superPotionsList = ['super_attack', 'super_strength', 'super_defence', 'super_ranging', 'super_magic', 'super_necromancy'];
+				superPotionsList.forEach((potionId) => {
+					calculateSuperPotionIngredients(potionId, desiredAmount * 4, 'supreme_overload');
+				});
 
-      if (potionData) {
-        addIngredient(potionId, `${potionData.name.replace("(4)", "(3)")}`, desiredAmount, potionData.image)
+				// Add salve ingredients if making supreme salve
+				if (overloadType === 'supreme_overload_salve') {
+					calculateOtherPotionIngredients('prayer_renewal', desiredAmount * 4, 'supreme_overload');
+					calculateOtherPotionIngredients('prayer_potion', desiredAmount * 4, 'supreme_overload');
+					calculateOtherPotionIngredients('super_antifire', desiredAmount * 4, 'supreme_overload');
+					calculateOtherPotionIngredients('antifire', desiredAmount * 4, 'supreme_overload');
+					calculateOtherPotionIngredients('super_antipoison', desiredAmount * 4, 'supreme_overload');
+				}
+			}
+		} else if (overloadType === 'elder_overload' || overloadType === 'elder_overload_salve') {
+			// Start with Elder Overload as the root
+			const elderOverload = findItem('elder_overload');
+			if (elderOverload) {
+				addIngredient('elder_overload', elderOverload.name, desiredAmount, elderOverload.image);
 
-        // Calculate ingredients for each extreme potion
-        const recipe = extremeRecipes[potionId]
-        if (recipe) {
-          // Add herb if needed
-          if (recipe.herb) {
-            const herb = findItem(recipe.herb)
-            if (herb) {
-              addIngredient(recipe.herb, herb.name, desiredAmount, herb.image)
-            }
-          }
+				// Add Supreme Overload as a child of Elder Overload
+				const supremeOverload = findItem('supreme_overload');
+				if (supremeOverload) {
+					addIngredient('supreme_overload', supremeOverload.name, desiredAmount, supremeOverload.image, 'elder_overload');
 
-          // Add super potion
-          const superPotionId = recipe.secondary
-          const superPotion = findItem(superPotionId)
-          if (superPotion) {
-            addIngredient(superPotionId, superPotion.name, desiredAmount, superPotion.image)
+					// Add Overload as a child of Supreme Overload
+					const overload = findItem('overload');
+					if (overload) {
+						addIngredient('overload', overload.name, desiredAmount, overload.image, 'elder_overload.supreme_overload');
 
-            // Calculate ingredients for super potion
-            const superRecipe = superRecipes[superPotionId]
-            if (superRecipe) {
-              const superHerb = findItem(superRecipe.herb)
-              if (superHerb) {
-                addIngredient(superRecipe.herb, superHerb.name, desiredAmount, superHerb.image)
-              }
+						// Add extreme potions under the overload
+						const extremePotionsList = ['extreme_attack', 'extreme_strength', 'extreme_defence', 'extreme_ranging', 'extreme_magic', 'extreme_necromancy'];
+						extremePotionsList.forEach((potionId) => {
+							calculateExtremePotionIngredients(potionId, dosesNeeded, 'elder_overload.supreme_overload.overload');
+						});
 
-              const superSecondary = findItem(superRecipe.secondary)
-              if (superSecondary) {
-                const quantity = (superRecipe.quantity || 1) * desiredAmount
-                addIngredient(superRecipe.secondary, superSecondary.name, quantity, superSecondary.image)
-              }
-            }
-          }
+						// Add torstol under the overload
+						const torstolAmount = inventory.herbs.torstol || 0;
+						const neededTorstol = Math.max(0, desiredAmount - torstolAmount);
+						if (neededTorstol > 0) {
+							addIngredient('torstol', 'Clean Torstol', desiredAmount, findItem('torstol')?.image || '', 'elder_overload.supreme_overload.overload');
+						}
+					}
 
-          // Add other ingredient if needed
-          if (recipe.other) {
-            const other = findItem(recipe.other)
-            if (other) {
-              const quantity = (recipe.otherQuantity || 1) * desiredAmount
-              addIngredient(recipe.other, other.name, quantity, other.image)
-            }
-          }
-        }
-      }
-    })
+					// Add super potions as direct children of Supreme Overload
+					const superPotionsList = ['super_attack', 'super_strength', 'super_defence', 'super_ranging', 'super_magic', 'super_necromancy'];
+					superPotionsList.forEach((potionId) => {
+						calculateSuperPotionIngredients(potionId, dosesNeeded, 'elder_overload.supreme_overload');
+					});
+				}
 
-    // Add additional ingredients based on overload type
-    if (
-      overloadType === "supreme_overload" ||
-      overloadType === "supreme_overload_salve" ||
-      overloadType === "elder_overload" ||
-      overloadType === "elder_overload_salve"
-    ) {
-      // Supreme overload requires super potions
-      const superPotions = [
-        "super_attack",
-        "super_strength",
-        "super_defence",
-        "super_ranging",
-        "super_magic",
-        "super_necromancy",
-      ]
+				// Add Elder Overload specific ingredients
+				const primalExtract = findItem('primal_extract');
+				if (primalExtract) {
+					const currentAmount = inventory.secondaries.primal_extract || 0;
+					const neededAmount = Math.max(0, desiredAmount - currentAmount);
+					if (neededAmount > 0) {
+						addIngredient('primal_extract', primalExtract.name, desiredAmount, primalExtract.image, 'elder_overload');
+					}
+				}
 
-      superPotions.forEach((potionId) => {
-        const potion = findItem(potionId)
-        if (potion) {
-          addIngredient(potionId, potion.name, desiredAmount, potion.image)
+				const fellstalk = findItem('fellstalk');
+				if (fellstalk) {
+					const currentAmount = inventory.herbs.fellstalk || 0;
+					const neededAmount = Math.max(0, desiredAmount - currentAmount);
+					if (neededAmount > 0) {
+						addIngredient('fellstalk', fellstalk.name, desiredAmount, fellstalk.image, 'elder_overload');
+					}
+				}
 
-          // Calculate ingredients for super potion
-          const recipe = superRecipes[potionId]
-          if (recipe) {
-            const herb = findItem(recipe.herb)
-            if (herb) {
-              addIngredient(recipe.herb, herb.name, desiredAmount, herb.image)
-            }
+				// Add salve ingredients if making elder salve
+				if (overloadType === 'elder_overload_salve') {
+					calculateOtherPotionIngredients('prayer_renewal', desiredAmount * 4, 'elder_overload');
+					calculateOtherPotionIngredients('prayer_potion', desiredAmount * 4, 'elder_overload');
+					calculateOtherPotionIngredients('super_antifire', desiredAmount * 4, 'elder_overload');
+					calculateOtherPotionIngredients('antifire', desiredAmount * 4, 'elder_overload');
+					calculateOtherPotionIngredients('super_antipoison', desiredAmount * 4, 'elder_overload');
+				}
+			}
+		} else if (overloadType === 'overload' || overloadType === 'overload_salve') {
+			// Regular overload calculation
+			const overload = findItem('overload');
+			if (overload) {
+				addIngredient('overload', overload.name, desiredAmount, overload.image);
 
-            const secondary = findItem(recipe.secondary)
-            if (secondary) {
-              const quantity = (recipe.quantity || 1) * desiredAmount
-              addIngredient(recipe.secondary, secondary.name, quantity, secondary.image)
-            }
-          }
-        }
-      })
-    }
+				const extremePotionsList = ['extreme_attack', 'extreme_strength', 'extreme_defence', 'extreme_ranging', 'extreme_magic', 'extreme_necromancy'];
+				extremePotionsList.forEach((potionId) => {
+					calculateExtremePotionIngredients(potionId, dosesNeeded, 'overload');
+				});
 
-    // Add salve ingredients
-    if (
-      overloadType === "overload_salve" ||
-      overloadType === "supreme_overload_salve" ||
-      overloadType === "elder_overload_salve"
-    ) {
-      // Common ingredients for all salve potions
-      const salveIngredients = ["prayer_renewal", "prayer_potion", "super_antifire", "antifire", "super_antipoison"]
+				const torstolAmount = inventory.herbs.torstol || 0;
+				const neededTorstol = Math.max(0, desiredAmount - torstolAmount);
+				if (neededTorstol > 0) {
+					addIngredient('torstol', 'Clean Torstol', desiredAmount, findItem('torstol')?.image || '', 'overload');
+				}
 
-      salveIngredients.forEach((id) => {
-        const item = findItem(id)
-        if (item) {
-          addIngredient(id, item.name, desiredAmount, item.image)
+				// Add salve ingredients if making overload salve
+				if (overloadType === 'overload_salve') {
+					calculateOtherPotionIngredients('prayer_renewal', desiredAmount * 4, 'overload');
+					calculateOtherPotionIngredients('prayer_potion', desiredAmount * 4, 'overload');
+					calculateOtherPotionIngredients('super_antifire', desiredAmount * 4, 'overload');
+					calculateOtherPotionIngredients('antifire', desiredAmount * 4, 'overload');
+					calculateOtherPotionIngredients('super_antipoison', desiredAmount * 4, 'overload');
+				}
+			}
+		}
 
-          // Calculate ingredients for these potions
-          calculateOtherPotionIngredients(id, desiredAmount)
-        }
-      })
-    }
+		// Update quantities after all ingredients are added
+		setIngredients((prev) => updateIngredientQuantities(prev));
+	};
 
-    // Add elder overload ingredients
-    if (overloadType === "elder_overload" || overloadType === "elder_overload_salve") {
-      // Elder overload requires primal extract and clean fellstalk
-      const primalExtract = findItem("primal_extract")
-      if (primalExtract) {
-        addIngredient("primal_extract", primalExtract.name, desiredAmount, primalExtract.image)
-      }
+	// Helper functions need to be updated to handle parent parameter
+	const calculateExtremePotionIngredients = (potionId: string, dosesNeeded: number, parentPath?: string) => {
+		const recipe = extremeRecipes[potionId];
+		if (!recipe) return;
 
-      const fellstalk = findItem("fellstalk")
-      if (fellstalk) {
-        addIngredient("fellstalk", fellstalk.name, desiredAmount, fellstalk.image)
-      }
-    }
+		const potion = findItem(potionId);
+		if (potion) {
+			// Each craft produces 3 doses, so we need to ceil(dosesNeeded/3) crafts
+			const potionsNeeded = Math.ceil(dosesNeeded / 3);
+			addIngredient(potionId, potion.name, potionsNeeded, potion.image, parentPath);
 
-    // Convert to array and sort
-    const ingredientsList = Object.values(requiredIngredients)
+			const newParentPath = parentPath ? `${parentPath}.${potionId}` : potionId;
 
-    // Sort by type (herbs first, then potions, then secondaries)
-    ingredientsList.sort((a, b) => {
-      // Helper function to determine ingredient type
-      const getType = (id: string) => {
-        if (herbs.some((h) => h.id === id)) return 0 // Herbs
-        if (
-          id.includes("extreme_") ||
-          id.includes("super_") ||
-          id === "prayer_renewal" ||
-          id === "prayer_potion" ||
-          id === "antifire" ||
-          id === "super_antifire" ||
-          id === "super_antipoison"
-        )
-          return 1 // Potions
-        return 2 // Secondaries
-      }
+			// Calculate ingredients needed for the extreme potion
+			if (recipe.herb) {
+				const herb = findItem(recipe.herb);
+				if (herb) {
+					addIngredient(recipe.herb, herb.name, potionsNeeded, herb.image, newParentPath);
+				}
+			}
 
-      return getType(a.id) - getType(b.id) || a.name.localeCompare(b.name)
-    })
+			// Calculate required super potion doses
+			// Each extreme potion craft requires 3 doses of the super potion
+			const superPotionDosesNeeded = potionsNeeded * 3;
+			const superPotionId = potionId.replace('extreme_', 'super_');
+			calculateSuperPotionIngredients(superPotionId, superPotionDosesNeeded, newParentPath);
 
-    setIngredients(ingredientsList)
-    setShowResults(true)
-  }
+			if (recipe.other) {
+				const other = findItem(recipe.other);
+				if (other) {
+					const otherQuantity = (recipe.otherQuantity || 1) * potionsNeeded;
+					addIngredient(recipe.other, other.name, otherQuantity, other.image, newParentPath);
+				}
+			}
+		}
+	};
 
-  const filteredIngredients = () => {
-    if (viewMode === "all") return ingredients
+	const calculateSuperPotionIngredients = (potionId: string, dosesNeeded: number, parentPath?: string) => {
+		const recipe = superRecipes[potionId];
+		if (!recipe) return;
 
-    if (viewMode === "herbs") {
-      return ingredients.filter((item) => herbs.some((h) => h.id === item.id))
-    }
+		const potion = findItem(potionId);
+		if (potion) {
+			// Determine doses needed based on context
+			let potionsNeeded;
+			if (parentPath?.includes('extreme_')) {
+				// If this super potion is used for an extreme potion, we need 3 doses
+				potionsNeeded = Math.ceil(dosesNeeded / 3);
+			} else {
+				// For supreme overload direct supers and salve components, we need 4 doses
+				potionsNeeded = Math.ceil(dosesNeeded / 4);
+			}
 
-    if (viewMode === "potions") {
-      return ingredients.filter(
-        (item) =>
-          item.id.includes("extreme_") ||
-          item.id.includes("super_") ||
-          item.id === "prayer_renewal" ||
-          item.id === "prayer_potion" ||
-          item.id === "antifire" ||
-          item.id === "super_antifire" ||
-          item.id === "super_antipoison",
-      )
-    }
+			addIngredient(potionId, potion.name, potionsNeeded, potion.image, parentPath);
 
-    if (viewMode === "secondaries") {
-      return ingredients.filter(
-        (item) =>
-          !herbs.some((h) => h.id === item.id) &&
-          !item.id.includes("extreme_") &&
-          !item.id.includes("super_") &&
-          item.id !== "prayer_renewal" &&
-          item.id !== "prayer_potion" &&
-          item.id !== "antifire" &&
-          item.id !== "super_antifire" &&
-          item.id !== "super_antipoison",
-      )
-    }
+			const newParentPath = parentPath ? `${parentPath}.${potionId}` : potionId;
 
-    if (viewMode === "needed") {
-      return ingredients.filter((item) => !item.sufficient)
-    }
+			// Add recipe ingredients
+			if (recipe.herb) {
+				const herb = findItem(recipe.herb);
+				if (herb) {
+					addIngredient(recipe.herb, herb.name, potionsNeeded, herb.image, newParentPath);
+				}
+			}
 
-    return ingredients
-  }
+			const secondary = findItem(recipe.secondary);
+			if (secondary) {
+				const quantity = (recipe.quantity || 1) * potionsNeeded;
+				addIngredient(recipe.secondary, secondary.name, quantity, secondary.image, newParentPath);
+			}
+		}
+	};
 
-  const getOverloadName = (type: OverloadType) => {
-    switch (type) {
-      case "overload":
-        return "Overload"
-      case "supreme_overload":
-        return "Supreme Overload"
-      case "overload_salve":
-        return "Overload Salve"
-      case "supreme_overload_salve":
-        return "Supreme Overload Salve"
-      case "elder_overload":
-        return "Elder Overload"
-      case "elder_overload_salve":
-        return "Elder Overload Salve"
-      default:
-        return "Overload"
-    }
-  }
+	// Calculate ingredients for additional recipes (prayer renewal, antifire, etc)
+	const calculateOtherPotionIngredients = (potionId: string, amount: number, parentPath?: string) => {
+		const recipe = otherPotionRecipes[potionId as keyof typeof otherPotionRecipes];
+		if (!recipe) return;
 
-  // Count how many ingredients we still need to obtain
-  const neededCount = ingredients.filter((item) => !item.sufficient).length
+		// Add the parent potion first
+		const parentPotion = findItem(potionId);
+		if (parentPotion) {
+			addIngredient(potionId, parentPotion.name, amount, parentPotion.image, parentPath);
+		}
 
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-        <ShoppingBag className="h-6 w-6" />
-        Shopping List Calculator
-      </h2>
+		const newParentPath = parentPath ? `${parentPath}.${potionId}` : potionId;
 
-      <Card className="bg-[#1a2e1a] border-[#2a5331]">
-        <CardHeader>
-          <CardTitle className="text-white">Calculate Required Ingredients</CardTitle>
-          <CardDescription className="text-gray-300">
-            Enter the number of overloads you want to make and select the type
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-white">Number of Overloads</label>
-              <Input
-                type="number"
-                min="1"
-                value={desiredAmount}
-                onChange={(e) => setDesiredAmount(Number(e.target.value) || 1)}
-                className="bg-[#0f1f0f] border-[#2a5331] text-white"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-white">Overload Type</label>
-              <Select value={overloadType} onValueChange={(value) => setOverloadType(value as OverloadType)}>
-                <SelectTrigger className="bg-[#0f1f0f] border-[#2a5331] text-white">
-                  <SelectValue placeholder="Select overload type" />
-                </SelectTrigger>
-                <SelectContent className="bg-[#1a2e1a] border-[#2a5331] text-white">
-                  <SelectItem value="overload">Overload</SelectItem>
-                  <SelectItem value="supreme_overload">Supreme Overload</SelectItem>
-                  <SelectItem value="overload_salve">Overload Salve</SelectItem>
-                  <SelectItem value="supreme_overload_salve">Supreme Overload Salve</SelectItem>
-                  <SelectItem value="elder_overload">Elder Overload</SelectItem>
-                  <SelectItem value="elder_overload_salve">Elder Overload Salve</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+		// Handle herb ingredients
+		if (recipe.herb) {
+			const herb = findItem(recipe.herb);
+			if (herb) {
+				addIngredient(recipe.herb, herb.name, amount, herb.image, newParentPath);
+			}
+		}
 
-          <Button onClick={calculateIngredients} className="w-full bg-[#2a5331] hover:bg-[#3a7341] text-white">
-            Calculate Ingredients
-          </Button>
-        </CardContent>
-      </Card>
+		// Handle secondary ingredients
+		const secondary = findItem(recipe.secondary);
+		if (secondary) {
+			addIngredient(recipe.secondary, secondary.name, amount, secondary.image, newParentPath);
+		}
 
-      {showResults && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold text-white">
-              Ingredients for {desiredAmount} {getOverloadName(overloadType)}s
-            </h3>
-            <div className="flex items-center gap-2">
-              <ArrowDown className="h-4 w-4 text-white" />
-              <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as any)} className="w-full">
-                <TabsList className="bg-[#1a2e1a] border border-[#2a5331]">
-                  <TabsTrigger
-                    value="all"
-                    className="text-sm text-white data-[state=active]:bg-[#2a5331] data-[state=active]:text-white"
-                  >
-                    All
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="needed"
-                    className="text-sm text-white data-[state=active]:bg-[#2a5331] data-[state=active]:text-white"
-                  >
-                    Needed ({neededCount})
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="herbs"
-                    className="text-sm text-white data-[state=active]:bg-[#2a5331] data-[state=active]:text-white"
-                  >
-                    Herbs
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="potions"
-                    className="text-sm text-white data-[state=active]:bg-[#2a5331] data-[state=active]:text-white"
-                  >
-                    Potions
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="secondaries"
-                    className="text-sm text-white data-[state=active]:bg-[#2a5331] data-[state=active]:text-white"
-                  >
-                    Secondaries
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-          </div>
+		// Handle potion ingredients
+		if (recipe.potion && typeof recipe.potion === 'string') {
+			const potion = findItem(recipe.potion);
+			if (potion) {
+				addIngredient(recipe.potion, potion.name, amount, potion.image, newParentPath);
+				calculateOtherPotionIngredients(recipe.potion, amount, newParentPath);
+			}
+		}
+	};
 
-          <div className="space-y-2">
-            {filteredIngredients().map((ingredient) => (
-              <Card
-                key={ingredient.id}
-                className={`bg-[#1a2e1a] border-[#2a5331] ${ingredient.sufficient ? "border-l-4 border-l-green-500" : ""}`}
-              >
-                <CardContent className="p-3">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-[#2a5331] rounded-md flex items-center justify-center">
-                      <img src={ingredient.image || "/placeholder.svg"} alt={ingredient.name} className="w-10 h-10" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-white">{ingredient.name}</p>
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="text-gray-300">Have: {ingredient.have}</span>
-                        <span className="text-gray-300">•</span>
-                        <span className="text-gray-300">Need: {ingredient.need}</span>
-                      </div>
-                    </div>
-                    <div className="text-right flex flex-col items-end">
-                      <p className="text-lg font-bold text-white">{ingredient.quantity} total</p>
-                      {ingredient.sufficient ? (
-                        <span className="text-green-400 flex items-center text-sm">
-                          <CheckCircle2 className="h-4 w-4 mr-1" /> Sufficient
-                        </span>
-                      ) : (
-                        <span className="text-yellow-400 text-sm">Need {ingredient.need} more</span>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
+	const addIngredient = (id: string, name: string, amount: number, image: string, parentPath?: string) => {
+		setIngredients((prev) => {
+			const newIngredient: IngredientItem = {
+				id,
+				name,
+				quantity: amount,
+				image,
+				have: 0,
+				need: amount,
+				parent: parentPath,
+				sufficient: false,
+				children: [],
+			};
+
+			// If there's no parent path, add to root level
+			if (!parentPath) {
+				return [...prev, newIngredient];
+			}
+
+			// Handle dot notation paths (e.g., "overload.extreme_attack.super_attack")
+			const parentParts = parentPath.split('.');
+
+			// Helper function to recursively add ingredient to the correct parent
+			const addToParent = (items: IngredientItem[], parts: string[]): IngredientItem[] => {
+				if (parts.length === 0) return items;
+
+				const currentParent = parts[0];
+				const remainingPath = parts.slice(1);
+
+				return items.map((item) => {
+					if (item.id === currentParent) {
+						return {
+							...item,
+							children: remainingPath.length === 0 ? [...(item.children || []), newIngredient] : addToParent(item.children || [], remainingPath),
+						};
+					}
+					return item;
+				});
+			};
+
+			return addToParent(prev, parentParts);
+		});
+	};
+
+	// Find herb or secondary by ID
+	const findItem = (id: string) => {
+		const herb = herbs.find((h) => h.id === id);
+		if (herb) return herb;
+		if (overloadRecipe.id === id) return overloadRecipe;
+		const otherOverload = additionalOverloadRecipes[id];
+		if (otherOverload) return otherOverload;
+		const extremePotion = extremePotions.find((p) => p.id === id);
+		if (extremePotion) return extremePotion;
+		const secondary = secondaries.find((s) => s.id === id);
+		return secondary;
+	};
+
+	const getOverloadName = (type: OverloadType) => {
+		switch (type) {
+			case 'overload':
+				return 'Overload';
+			case 'supreme_overload':
+				return 'Supreme Overload';
+			case 'overload_salve':
+				return 'Overload Salve';
+			case 'supreme_overload_salve':
+				return 'Supreme Overload Salve';
+			case 'elder_overload':
+				return 'Elder Overload';
+			case 'elder_overload_salve':
+				return 'Elder Overload Salve';
+			default:
+				return 'Overload';
+		}
+	};
+
+	// Get the root level ingredients for the tree view
+	const getTreeIngredients = () => {
+		console.log('Ingredients:', ingredients);
+		return ingredients.filter((ingredient) => !ingredient.parent);
+	};
+
+	const renderIngredientTree = (ingredient: IngredientItem, level: number = 0) => {
+		const cardContent = (
+			<div className='flex items-center gap-4'>
+				<div className='w-12 h-12 bg-[#2a5331] rounded-md flex items-center justify-center'>
+					<img src={ingredient.image || '/placeholder.svg'} alt={ingredient.name} className='w-10 h-10' />
+				</div>
+				<div className='flex-1'>
+					<p className='font-medium text-white'>{ingredient.name}</p>
+					<div className='flex items-center gap-2 text-sm'>
+						<span className='text-gray-300'>Have: {ingredient.have}</span>
+						<span className='text-gray-300'>•</span>
+						<span className='text-gray-300'>Need: {ingredient.need}</span>
+					</div>
+				</div>
+				<div className='text-right flex flex-col items-end'>
+					<p className='text-lg font-bold text-white'>{ingredient.quantity} total</p>
+					{ingredient.sufficient ? (
+						<span className='text-green-400 flex items-center text-sm'>
+							<CheckCircle2 className='h-4 w-4 mr-1' /> Sufficient
+						</span>
+					) : (
+						<span className='text-yellow-400 text-sm'>Need {ingredient.need} more</span>
+					)}
+				</div>
+			</div>
+		);
+
+		return (
+			<div key={ingredient.id} style={{ paddingLeft: `${level * 24}px` }}>
+				<Card className={`bg-[#1a2e1a] border-[#2a5331] mb-2 ${ingredient.sufficient ? 'border-l-4 border-l-green-500' : ''}`}>
+					<CardContent className='p-3'>{cardContent}</CardContent>
+				</Card>
+				{ingredient.children && ingredient.children.length > 0 && !ingredient.sufficient && <div className='border-l-2 border-[#2a5331] ml-6 mt-2'>{ingredient.children.map((child) => renderIngredientTree(child, level + 1))}</div>}
+			</div>
+		);
+	};
+
+	return (
+		<div className='space-y-6'>
+			<h2 className='text-2xl font-bold text-white flex items-center gap-2'>
+				<ShoppingBag className='h-6 w-6' />
+				Shopping List Calculator
+			</h2>
+
+			<Card className='bg-[#1a2e1a] border-[#2a5331]'>
+				<CardHeader>
+					<CardTitle className='text-white'>Calculate Required Ingredients</CardTitle>
+					<CardDescription className='text-gray-300'>Enter the number of overloads you want to make and select the type</CardDescription>
+				</CardHeader>
+				<CardContent className='space-y-4'>
+					<div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+						<div className='space-y-2'>
+							<label className='text-sm font-medium text-white'>Number of Overloads</label>
+							<Input type='number' min='1' value={desiredAmount} onChange={(e) => setDesiredAmount(Number(e.target.value) || 1)} className='bg-[#0f1f0f] border-[#2a5331] text-white' />
+						</div>
+						<div className='space-y-2'>
+							<label className='text-sm font-medium text-white'>Overload Type</label>
+							<Select value={overloadType} onValueChange={(value) => setOverloadType(value as OverloadType)}>
+								<SelectTrigger className='bg-[#0f1f0f] border-[#2a5331] text-white'>
+									<SelectValue placeholder='Select overload type' />
+								</SelectTrigger>
+								<SelectContent className='bg-[#1a2e1a] border-[#2a5331] text-white'>
+									<SelectItem value='overload'>Overload</SelectItem>
+									<SelectItem value='supreme_overload'>Supreme Overload</SelectItem>
+									<SelectItem value='overload_salve'>Overload Salve</SelectItem>
+									<SelectItem value='supreme_overload_salve'>Supreme Overload Salve</SelectItem>
+									<SelectItem value='elder_overload'>Elder Overload</SelectItem>
+									<SelectItem value='elder_overload_salve'>Elder Overload Salve</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					</div>
+
+					<Button onClick={calculateIngredients} className='w-full bg-[#2a5331] hover:bg-[#3a7341] text-white'>
+						Calculate Ingredients
+					</Button>
+				</CardContent>
+			</Card>
+
+			<div className='space-y-4'>
+				<h3 className='text-xl font-bold text-white'>
+					Ingredients for {desiredAmount} {getOverloadName(overloadType)}s
+				</h3>
+
+				<div className='space-y-2'>{getTreeIngredients().map((ingredient) => renderIngredientTree(ingredient))}</div>
+			</div>
+		</div>
+	);
 }
