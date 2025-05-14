@@ -29,10 +29,10 @@ export function calculatePossibleOverloads(inventory: InventoryState): {
 		extreme_necromancy: getPotionDoses(inventory, 'extreme_necromancy'),
 	};
 
-	// Each overload requires 3 doses of each component (changed from 4)
+	// Each overload requires 3 doses of each extreme component
 	const limits = [
-		Math.floor(torstolLimit),
-		Math.floor(extremeLimits.extreme_attack / 3),
+		Math.floor(torstolLimit),  // 1 torstol per overload
+		Math.floor(extremeLimits.extreme_attack / 3),  // 3 doses per overload
 		Math.floor(extremeLimits.extreme_strength / 3),
 		Math.floor(extremeLimits.extreme_defence / 3),
 		Math.floor(extremeLimits.extreme_ranging / 3),
@@ -85,12 +85,13 @@ export function calculatePossibleExtremes(inventory: InventoryState) {
 			? Math.floor((inventory.secondaries[otherId] || 0) / otherQuantity)
 			: Number.POSITIVE_INFINITY;
 
-		// Each extreme potion requires 3 doses of the super potion (changed from 4)
+		// Each extreme potion requires 3 doses of the super potion
 		const effectiveSecondaryCount = Math.floor(secondaryDoses / 3);
 
 		// Also consider existing extreme doses
 		const existingDoses = getPotionDoses(inventory, potionId);
-		const existingPotions = Math.floor(existingDoses / 3); // Changed from 4
+		// Extreme potions are always calculated in 3-dose units
+		const existingPotions = Math.floor(existingDoses / 3);
 
 		// Add the existing potions to what we can make
 		const possible = existingPotions + Math.min(herbCount, effectiveSecondaryCount, otherCount);
@@ -130,7 +131,8 @@ export function calculatePossibleSupers(inventory: InventoryState) {
 
 		// Consider existing super potion doses
 		const existingDoses = getPotionDoses(inventory, potionId);
-		const existingPotions = Math.floor(existingDoses / 3); // Changed from 4
+		// Super potions for extremes need 3 doses, but 4 doses for supreme overloads
+		const existingPotions = Math.floor(existingDoses / (secondaryId.includes('supreme_') ? 4 : 3));
 
 		// Add the existing potions to what we can make
 		const possible = existingPotions + Math.min(herbCount, secondaryCount);
@@ -166,40 +168,128 @@ function getLimitingFactor(amounts: Record<string, number>): string {
 }
 
 export function calculateOverloadsFromScratch(inventory: InventoryState) {
-	const extremeResults = calculatePossibleExtremes(inventory);
-	const overloadResults = calculatePossibleOverloads(inventory);
+	// Keep track of remaining herbs after each step
+	const remainingHerbs = { ...inventory.herbs };
 
-	const virtualInventory: InventoryState = {
+	// First calculate super potions - these are the base requirement
+	// Each recipe needs specific herbs, so let's calculate them one by one
+	const superPotionsHerbMap = {
+		super_attack: { herb: 'irit', required: 1 },
+		super_strength: { herb: 'kwuarm', required: 1 },
+		super_defence: { herb: 'cadantine', required: 1 },
+		super_ranging: { herb: 'dwarf_weed', required: 1 },
+		super_magic: { herb: 'lantadyme', required: 1 },
+		super_necromancy: { herb: 'spirit_weed', required: 1 },
+	};
+
+	const superPotionsInventory = {
 		...inventory,
+		herbs: remainingHerbs
+	};
+
+	const superResults = calculatePossibleSupers(superPotionsInventory);
+
+	// Subtract used herbs from remaining herbs
+	Object.entries(superPotionsHerbMap).forEach(([potionId, { herb, required }]) => {
+		const amountUsed = (superResults[potionId]?.possible || 0) * required;
+		remainingHerbs[herb] = Math.max(0, (remainingHerbs[herb] || 0) - amountUsed);
+	});
+
+	// Create inventory for extreme potions with remaining herbs and created super potions
+	const extremeInventory: InventoryState = {
+		...inventory,
+		herbs: remainingHerbs,
 		potionDoses: {
 			...inventory.potionDoses,
-			extreme_attack: Number(extremeResults.extreme_attack || 0) * 3,
-			extreme_strength: Number(extremeResults.extreme_strength || 0) * 3,
-			extreme_defence: Number(extremeResults.extreme_defence || 0) * 3,
-			extreme_ranging: Number(extremeResults.extreme_ranging || 0) * 3,
-			extreme_magic: Number(extremeResults.extreme_magic || 0) * 3,
-			extreme_necromancy: (Number(extremeResults.extreme_necromancy) || 0) * 3,
-			overload: overloadResults.possibleOverloads * 3,
-		},
-		potionCounts: {
-			...inventory.potionCounts,
-			overload: {
-				oneDose: 0,
-				twoDose: 0,
-				threeDose: overloadResults.possibleOverloads,
-				fourDose: 0
-			}
+			super_attack: (superResults.super_attack?.possible || 0) * 3,
+			super_strength: (superResults.super_strength?.possible || 0) * 3,
+			super_defence: (superResults.super_defence?.possible || 0) * 3,
+			super_ranging: (superResults.super_ranging?.possible || 0) * 3,
+			super_magic: (superResults.super_magic?.possible || 0) * 3,
+			super_necromancy: (superResults.super_necromancy?.possible || 0) * 3,
 		}
 	};
 
-	return virtualInventory;
+	// Calculate extremes using the virtual inventory
+	const extremePotionsHerbMap = {
+		extreme_attack: { herb: 'avantoe', required: 1 },
+		extreme_strength: { herb: 'dwarf_weed', required: 1 },
+		extreme_defence: { herb: 'lantadyme', required: 1 },
+		// extreme_ranging: no herb needed,
+		// extreme_magic: no herb needed,
+		// extreme_necromancy: no herb needed
+	};
+
+	const extremeResults = calculatePossibleExtremes(extremeInventory);
+
+	// Subtract herbs used for extreme potions
+	Object.entries(extremePotionsHerbMap).forEach(([potionId, { herb, required }]) => {
+		const amountUsed = (extremeResults[potionId]?.possible || 0) * required;
+		remainingHerbs[herb] = Math.max(0, (remainingHerbs[herb] || 0) - amountUsed);
+	});
+
+	// Create inventory for overload calculation with remaining herbs and created extreme potions
+	const overloadInventory: InventoryState = {
+		...inventory,
+		herbs: remainingHerbs,
+		potionDoses: {
+			...inventory.potionDoses,
+			extreme_attack: (extremeResults.extreme_attack?.possible || 0) * 3,
+			extreme_strength: (extremeResults.extreme_strength?.possible || 0) * 3,
+			extreme_defence: (extremeResults.extreme_defence?.possible || 0) * 3,
+			extreme_ranging: (extremeResults.extreme_ranging?.possible || 0) * 3,
+			extreme_magic: (extremeResults.extreme_magic?.possible || 0) * 3,
+			extreme_necromancy: (extremeResults.extreme_necromancy?.possible || 0) * 3,
+		}
+	};
+
+	// Finally calculate overloads based on the virtual extreme potions and remaining herbs
+	// Overloads need torstol
+	const torstolNeeded = 1; // 1 torstol per overload
+	const overloadInventoryWithTorstol: InventoryState = {
+		...overloadInventory,
+		herbs: {
+			...remainingHerbs,
+			torstol: remainingHerbs.torstol || 0
+		}
+	};
+
+	const overloadResults = calculatePossibleOverloads(overloadInventoryWithTorstol);
+
+	// Return the results of everything that can be made from scratch, along with remaining herbs for debugging
+	return {
+		superResults,
+		extremeResults,
+		overloadResults,
+		remainingHerbs // This helps identify which herbs are the limiting factors
+	};
 }
 
 export function calculateAdditionalOverloads(inventory: InventoryState) {
-	// Calculate Supreme overloads (requires 4-dose overloads)
+	// Calculate ingredients needed for supreme overloads
+	const superDoses = {
+		attack: inventory.potionDoses.super_attack || 0,
+		strength: inventory.potionDoses.super_strength || 0,
+		defence: inventory.potionDoses.super_defence || 0,
+		ranging: inventory.potionDoses.super_ranging || 0,
+		magic: inventory.potionDoses.super_magic || 0,
+		necromancy: inventory.potionDoses.super_necromancy || 0,
+	};
+
+	// For supreme overload, we need 4 doses of each super potion and 4 doses of regular overload
 	const possibleSupremeFromOverloads = Math.floor(inventory.potionDoses.overload / 4);
+	const possibleSupremeFromSupers = Math.min(
+		Math.floor(superDoses.attack / 4),
+		Math.floor(superDoses.strength / 4),
+		Math.floor(superDoses.defence / 4),
+		Math.floor(superDoses.ranging / 4),
+		Math.floor(superDoses.magic / 4),
+		Math.floor(superDoses.necromancy / 4)
+	);
+
 	const supremeOverloads = Math.min(
 		possibleSupremeFromOverloads,
+		possibleSupremeFromSupers,
 		inventory.herbs.arbuck || 0,
 		inventory.herbs.primalExtract || 0
 	);
@@ -209,6 +299,7 @@ export function calculateAdditionalOverloads(inventory: InventoryState) {
 			possible: supremeOverloads,
 			limitingFactors: [getLimitingFactor({
 				'Regular Overload (4-dose)': possibleSupremeFromOverloads,
+				'Super Potions (4-dose each)': possibleSupremeFromSupers,
 				'Arbuck': inventory.herbs.arbuck || 0,
 				'Primal Extract': inventory.herbs.primalExtract || 0
 			})]

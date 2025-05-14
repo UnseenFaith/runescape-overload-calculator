@@ -9,20 +9,6 @@ import type { InventoryState } from './types';
 import { calculateOverloadsFromScratch, calculateAdditionalOverloads } from '@/lib/utils';
 import { AlertCircle, Beaker, FlaskRoundIcon as Flask, Layers } from 'lucide-react';
 
-interface CalculationResults {
-	overloadResults: {
-		possibleOverloads: number;
-		limitingFactors: string[];
-	};
-}
-
-interface OverloadResult {
-	herb: string;
-	secondary: string;
-	possibleOverloads: number;
-	limitingFactor: 'herb' | 'secondary';
-}
-
 function calculatePossibleOverloads(state: InventoryState) {
 	const torstolCount = state.herbs['torstol'] || 0;
 
@@ -203,9 +189,6 @@ export default function OverloadCalculator() {
 		setFromScratchResults(calculateOverloadsFromScratch(inventory));
 		setAdditionalResults(calculateAdditionalOverloads(inventory));
 	}, [inventory]);
-
-	// Calculate effective 3-dose potions for display
-	const effective3DoseExtremes = calculateEffective3DosePotions(inventory.potionCounts);
 
 	return (
 		<div className='space-y-6'>
@@ -465,7 +448,7 @@ export default function OverloadCalculator() {
 				</TabsContent>
 
 				<TabsContent value='scratch'>
-					{/*<Card className='bg-[#1a2e1a] border-[#2a5331]'>
+					<Card className='bg-[#1a2e1a] border-[#2a5331]'>
 						<CardHeader>
 							<CardTitle className='text-white flex items-center gap-2'>
 								<Layers className='h-6 w-6' />
@@ -577,8 +560,6 @@ export default function OverloadCalculator() {
 							)}
 						</CardContent>
 					</Card>
-					*/}
-					<h1>Disabled for now</h1>
 				</TabsContent>
 
 				<TabsContent value='variants'>
